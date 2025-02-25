@@ -26,7 +26,7 @@ class RobotLocalizer(Node):
         self.raw_rss = []
         
         # OSM文件路径
-        self.declare_parameter('osm_file_path', '/home/jay/wifi_backup/src/wifi_loc/map/shanghaitech_d2_1_2F_3F.osm')
+        self.declare_parameter('osm_file_path', '/home/jay/wifi_ws/src/wifi_loc/map/shanghaitech_d2_1_2F_3F.osm')
         self.osm_file_path = self.get_parameter('osm_file_path').get_parameter_value().string_value
         
         # 创建OSM解析器实例
