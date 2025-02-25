@@ -133,10 +133,15 @@ def main(args=None):
         rclpy.spin(robot_localizer)
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        print(f"Unexpected error: {e}")
     finally:
-        # 清理节点
-        robot_localizer.destroy_node()
-        rclpy.shutdown()
+        # 只在节点还没被销毁时执行销毁操作
+        if robot_localizer.get_node_names():
+            robot_localizer.destroy_node()
+        # 只在rclpy还在运行时执行关闭操作
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
