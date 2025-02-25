@@ -1,9 +1,8 @@
+import sys
 import xml.etree.ElementTree as ET
 import pickle
 from collections import Counter
-import sys
-import os
-import logging
+from .read_pickle import RssData, read_data_from_pickle
 
 class OsmDataParser:
     def __init__(self, osm_file):
@@ -19,7 +18,6 @@ class OsmDataParser:
         self.tree = ET.parse(self.osm_file)
         self.root = self.tree.getroot()
         self.all_mac = []
-        self.logger = logging.getLogger('wifi_loc.xmlparser')
 
     def parse(self):
         for element in self.root:
@@ -60,37 +58,28 @@ class OsmDataParser:
                 level_tag = tag_.attrib.get('v')
 
         if path_tag:
-            utils_dir = os.path.dirname(os.path.abspath(__file__))
-            if utils_dir not in sys.path:
-                sys.path.insert(0, utils_dir)
-                
-            try:
-                with open(path_tag, 'rb') as f:
-                    data = pickle.load(f)
-                
-                self.target_ap[(lon, lat)] = self.target_ap.get((lon, lat), {})
-                self.target_ap[(lon, lat)]['mac'] = {}
-                self.target_ap[(lon, lat)]['level'] = int(level_tag)
-                
-                for msg in data:
-                    mac_addresses = msg.mac_address
-                    rss_val = msg.data
+            # 使用read_data_from_pickle函数来加载数据
+            data = read_data_from_pickle(path_tag)
+            
+            self.target_ap[(lon, lat)] = self.target_ap.get((lon, lat), {})
+            self.target_ap[(lon, lat)]['mac'] = {}
+            self.target_ap[(lon, lat)]['level'] = int(level_tag)
+            
+            for msg in data:
+                mac_addresses = msg.mac_address
+                rss_val = msg.data
 
-                    for i, mac in enumerate(mac_addresses):
-                        rss_list = rss_val[i].rss
-                       
-                        if mac not in self.all_mac:
-                            self.all_mac.append(mac)
-                            
-                        if mac not in self.target_ap[(lon, lat)]['mac']:
-                            self.target_ap[(lon, lat)]['mac'][mac] = []
-                            self.target_ap[(lon, lat)]['level'] = int(level_tag)
-                            self.target_ap[(lon, lat)]['RP'] = tag_key
-                        self.target_ap[(lon, lat)]['mac'][mac].extend(rss_list)
+                for i, mac in enumerate(mac_addresses):
+                    rss_list = rss_val[i].rss
+                   
+                    if mac not in self.all_mac:
+                        self.all_mac.append(mac)
                         
-            except Exception as e:
-                self.logger.warning(f"加载pickle文件 {path_tag} 时出错: {str(e)}")
-                self.logger.info("请检查文件路径是否正确以及兼容性模块是否正确配置")
+                    if mac not in self.target_ap[(lon, lat)]['mac']:
+                        self.target_ap[(lon, lat)]['mac'][mac] = []
+                        self.target_ap[(lon, lat)]['level'] = int(level_tag)
+                        self.target_ap[(lon, lat)]['RP'] = tag_key
+                    self.target_ap[(lon, lat)]['mac'][mac].extend(rss_list)
 
     def _parse_way(self, element):
         way_nodes = [self.nodes[nd.attrib['ref']] for nd in element.iter('nd') if nd.attrib['ref'] in self.nodes]

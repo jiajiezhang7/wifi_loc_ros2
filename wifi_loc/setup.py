@@ -1,6 +1,7 @@
 from setuptools import find_packages, setup
 import os
 from glob import glob
+import sys
 
 package_name = 'wifi_loc'
 
@@ -15,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'map'), glob('map/*.osm')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'shapely'],
     zip_safe=True,
     maintainer='jay',
     maintainer_email='jerryzhang7@126.com',
@@ -30,6 +31,8 @@ setup(
     package_data={
         'wifi_loc': [
             'utils/*.py',
+            'data/*.json',
         ],
     },
+    python_executable=sys.executable,  # 使用当前Python解释器路径
 )

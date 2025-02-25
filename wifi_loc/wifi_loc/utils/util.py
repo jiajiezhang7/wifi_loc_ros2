@@ -179,49 +179,26 @@ def save_estimated_positions(estimated_positions, filename=None):
         json.dump(serializable_positions, f)
 
 def load_estimated_positions(filename=None):
-    """加载估计的AP位置，按优先级在多个位置查找文件"""
-    import os
-    import json
-    import numpy as np
+    """Load AP positions from a JSON file"""
+    if filename is None:
+        # 获取当前文件所在目录
+        current_dir = os.path.dirname(__file__)
+        # 往上走一级到达wifi_loc目录
+        wifi_loc_dir = os.path.dirname(os.path.dirname(current_dir))
+        # 构建到estimated_positions.json的路径
+        filename = os.path.join(wifi_loc_dir, 'wifi_loc', 'data', 'estimated_positions.json')
     
-    # 如果提供了明确的文件名，直接使用
-    if filename is not None:
-        if os.path.exists(filename):
-            try:
-                with open(filename, 'r') as f:
-                    estimated_positions = json.load(f)
-                    # 将列表转换回numpy数组
-                    for key, value in estimated_positions.items():
-                        if isinstance(value, list):
-                            estimated_positions[key] = np.array(value)
-                    return estimated_positions
-            except Exception as e:
-                print(f"警告：从指定路径 {filename} 加载文件时出错: {str(e)}")
+    with open(filename, 'r') as f:
+        serialized_positions = json.load(f)
     
-    # 可能的文件位置列表
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    possible_locations = [
-        os.path.join(current_dir, 'estimated_positions.json'),  # 当前目录
-        os.path.join(os.path.dirname(current_dir), 'data', 'estimated_positions.json'),  # wifi_loc/data 目录
-        os.path.join(os.path.dirname(os.path.dirname(current_dir)), 'data', 'estimated_positions.json'),  # 包根目录的data
-        '/home/jay/wifi_ws/src/wifi_loc/data/estimated_positions.json'  # 完整路径
-    ]
+    # Convert string keys back to tuples where necessary
+    estimated_positions = {}
+    for key, value in serialized_positions.items():
+        if ',' in key:
+            # Convert string coordinates back to tuple
+            lon, lat = map(float, key.split(','))
+            estimated_positions[(lon, lat)] = value
+        else:
+            estimated_positions[key] = value
     
-    # 尝试每个位置
-    for path in possible_locations:
-        if os.path.exists(path):
-            try:
-                print(f"找到估计位置文件: {path}")
-                with open(path, 'r') as f:
-                    estimated_positions = json.load(f)
-                    # 将列表转换回numpy数组
-                    for key, value in estimated_positions.items():
-                        if isinstance(value, list):
-                            estimated_positions[key] = np.array(value)
-                    return estimated_positions
-            except Exception as e:
-                print(f"警告：从 {path} 加载文件时出错: {str(e)}")
-    
-    # 如果所有位置都找不到文件，返回空字典
-    print("警告：在所有位置都找不到估计位置文件，将使用空字典")
-    return {}
+    return estimated_positions

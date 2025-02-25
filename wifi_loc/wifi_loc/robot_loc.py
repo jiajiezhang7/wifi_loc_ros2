@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from wifi_loc_interfaces.msg import RssData
 from wifi_loc.utils.Xmlparser import OsmDataParser
+from wifi_loc.utils.read_pickle import RssData, RssDatum
+from wifi_loc_interfaces.msg import RssData4Ros
 from collections import Counter
 import numpy as np
 from wifi_loc.utils.util import rssi_to_distance, load_estimated_positions
@@ -15,7 +16,7 @@ class RobotLocalizer(Node):
         
         # 创建订阅者（ROS2风格）
         self.rss_subscription = self.create_subscription(
-            RssData,
+            RssData4Ros,
             'rss',
             self.callback_rss,
             10  # QoS profile depth
@@ -25,7 +26,7 @@ class RobotLocalizer(Node):
         self.raw_rss = []
         
         # OSM文件路径
-        self.declare_parameter('osm_file_path', '/home/jay/wifi_ws/src/wifi_loc/map/shanghaitech_d2_1_2F_3F.osm')
+        self.declare_parameter('osm_file_path', '/home/jay/wifi_backup/src/wifi_loc/map/shanghaitech_d2_1_2F_3F.osm')
         self.osm_file_path = self.get_parameter('osm_file_path').get_parameter_value().string_value
         
         # 创建OSM解析器实例
