@@ -2,13 +2,15 @@
 import rclpy
 from rclpy.node import Node
 from wifi_loc.utils.Xmlparser import OsmDataParser
-from wifi_loc.utils.read_pickle import RssData, RssDatum
-from wifi_loc_interfaces.msg import RssData4Ros
+from wifi_loc.utils.read_pickle import RssData as PickleRssData, RssDatum
+from rss.msg import RssData, WifiLocation
 from collections import Counter
 import numpy as np
 from wifi_loc.utils.util import rssi_to_distance, load_estimated_positions
 from wifi_loc.utils.opter import PointEstimator
 from shapely.geometry import Polygon, Point, LineString
+import os
+from ament_index_python.packages import get_package_share_directory
 
 class RobotLocalizer(Node):
     def __init__(self):
@@ -16,18 +18,33 @@ class RobotLocalizer(Node):
         
         # 创建订阅者（ROS2风格）
         self.rss_subscription = self.create_subscription(
-            RssData4Ros,
+            RssData,
             'rss',
             self.callback_rss,
+            10  # QoS profile depth
+        )
+        
+        # 创建位置发布者
+        self.location_publisher = self.create_publisher(
+            WifiLocation,
+            'WifiLocation',
             10  # QoS profile depth
         )
         
         # 初始化数据
         self.raw_rss = []
         
+        # 获取包路径并设置默认OSM文件路径
+        package_share_dir = get_package_share_directory('wifi_loc')
+        default_osm_path = os.path.join(package_share_dir, 'map', 'shanghaitech_d2_1_2F_3F.osm')
+        
         # OSM文件路径
-        self.declare_parameter('osm_file_path', '/home/jay/wifi_ws/src/wifi_loc/map/shanghaitech_d2_1_2F_3F.osm')
+        self.declare_parameter('osm_file_path', default_osm_path)
         self.osm_file_path = self.get_parameter('osm_file_path').get_parameter_value().string_value
+        
+        # 控制是否使用AP真实位置的参数
+        self.declare_parameter('use_true_ap_positions', True)
+        self.use_true_ap_positions = self.get_parameter('use_true_ap_positions').get_parameter_value().bool_value
         
         # 创建OSM解析器实例
         self.parser = OsmDataParser(self.osm_file_path)
@@ -42,7 +59,7 @@ class RobotLocalizer(Node):
                 poly = Polygon(way)
                 self.polygons.append((poly, way_level))
                 
-        # 加载估计的AP位置
+        # 加载估计的AP位置(从json中读取)
         self.estimated_AP_positions = load_estimated_positions()
         
         # 创建logger
@@ -60,7 +77,9 @@ class RobotLocalizer(Node):
                 # 当收集到10个数据点时
                 if len(self.raw_rss) >= 10:
                     collected_data = self.raw_rss.copy()
-                    self.rss_subscription.destroy()  # ROS2中使用destroy而不是unregister
+                    # 不再销毁订阅者，而是取消订阅
+                    self.destroy_subscription(self.rss_subscription)
+                    self.rss_subscription = None  # 将引用设为 None
                     self.process_rss_data(collected_data)
                     
         except Exception as e:
@@ -93,16 +112,23 @@ class RobotLocalizer(Node):
         positions = []
         rssis = []
         
+        # 这是AP的真值 - 用它定位会很准
         self.get_logger().info(f'Known AP positions count: {len(self.ap_to_position)}')
+        # 这是AP的估计值 - 用它定位会一般
         self.get_logger().info(f'Estimated AP positions count: {len(self.estimated_AP_positions)}')
+        self.get_logger().info(f'Using {"true" if self.use_true_ap_positions else "estimated"} AP positions for calculation')
         
         for mac, avg_rssi in mac_avg_rssi.items():
-            if mac in self.ap_to_position:
-                self.get_logger().info(f'MAC address {mac} found in known list')
+            if self.use_true_ap_positions and mac in self.ap_to_position:
+                self.get_logger().info(f'MAC address {mac} found in known list (using true position)')
                 positions.append([self.ap_to_position[mac][0], self.ap_to_position[mac][1], 2])
                 rssis.append(avg_rssi)
+            elif not self.use_true_ap_positions and mac in self.estimated_AP_positions:
+                self.get_logger().info(f'MAC address {mac} found in estimated list (using estimated position)')
+                positions.append([self.estimated_AP_positions[mac][0], self.estimated_AP_positions[mac][1], 2])
+                rssis.append(avg_rssi)
             else:
-                self.get_logger().warn(f'MAC address {mac} not found in known list')
+                self.get_logger().warn(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
         
         if len(positions) >= 3:
             # 计算初始猜测位置（使用已知AP位置的平均值）
@@ -121,6 +147,16 @@ class RobotLocalizer(Node):
             
             if result is not None:
                 self.get_logger().info(f'Estimated position: {result.x}')
+                
+                # 创建并发布 WifiLocation 消息
+                location_msg = WifiLocation()
+                location_msg.latitude = float(result.x[0])   # 纬度
+                location_msg.longitude = float(result.x[1])  # 经度
+                location_msg.floor = int(round(result.x[2])) # 楼层
+                
+                # 发布位置消息
+                self.location_publisher.publish(location_msg)
+                self.get_logger().info('Published location to /WifiLocation topic')
             else:
                 self.get_logger().error('Position estimation failed')
 
@@ -129,19 +165,28 @@ def main(args=None):
     
     robot_localizer = RobotLocalizer()
     
+    # 添加启动消息
+    robot_localizer.get_logger().info("wifi_loc start work...")
+    
     try:
         rclpy.spin(robot_localizer)
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        robot_localizer.get_logger().error(f"意外错误: {e}")
     finally:
-        # 只在节点还没被销毁时执行销毁操作
-        if robot_localizer.get_node_names():
+        # 确保在销毁节点前清理所有订阅
+        try:
             robot_localizer.destroy_node()
+        except Exception as e:
+            print(f"Error during node destruction: {e}")
+        
         # 只在rclpy还在运行时执行关闭操作
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"Error during rclpy shutdown: {e}")
 
 if __name__ == '__main__':
     main()

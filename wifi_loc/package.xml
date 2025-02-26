@@ -10,7 +10,7 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>wifi_loc_interfaces</depend>
+  <depend>rss</depend>
   <depend>python3-shapely</depend>
   
   <buildtool_depend>ament_python</buildtool_depend>

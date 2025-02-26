@@ -22,7 +22,9 @@ setup(
     maintainer_email='jerryzhang7@126.com',
     description='WiFi-based indoor localization package',
     license='Apache-2.0',
-    tests_require=['pytest'],
+    extras_require={
+        'test': ['pytest'],
+    },
     entry_points={
         'console_scripts': [
             'robot_loc = wifi_loc.robot_loc:main',
@@ -34,5 +36,5 @@ setup(
             'data/*.json',
         ],
     },
-    python_executable=sys.executable,  # 使用当前Python解释器路径
+    # python_executable=sys.executable,  # 使用当前Python解释器路径
 )

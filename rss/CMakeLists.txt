@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(wifi_loc_interfaces)
+project(rss)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -9,8 +9,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/RssData4Ros.msg"
+  "msg/RssData.msg"
   "msg/RssDatum.msg"
+  "msg/WifiLocation.msg"
 )
 
 if(BUILD_TESTING)

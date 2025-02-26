@@ -51,7 +51,7 @@ def read_data_from_pickle(filename):
     try:
         with open(filename, 'rb') as f:
             data_list = pickle.load(f)
-        print("成功读取！")
+        # print("成功读取！")
         return data_list
     except Exception as e:
         print(f"读取pickle文件时出错: {e}")
