@@ -150,9 +150,10 @@ class RobotLocalizer(Node):
                 
                 # 创建并发布 WifiLocation 消息
                 location_msg = WifiLocation()
-                location_msg.latitude = float(result.x[0])   # 纬度
-                location_msg.longitude = float(result.x[1])  # 经度
-                location_msg.floor = int(round(result.x[2])) # 楼层
+                # latitude 纬度 -- x[1],  longitude 经度 -- x[0]
+                location_msg.latitude = float(result.x[1])   
+                location_msg.longitude = float(result.x[0])  
+                location_msg.floor = int(round(result.x[2])) 
                 
                 # 发布位置消息
                 self.location_publisher.publish(location_msg)
