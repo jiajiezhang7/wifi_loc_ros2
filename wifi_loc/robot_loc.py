@@ -42,8 +42,8 @@ class RobotLocalizer(Node):
         self.declare_parameter('osm_file_path', default_osm_path)
         self.osm_file_path = self.get_parameter('osm_file_path').get_parameter_value().string_value
         
-        # 控制是否使用AP真实位置的参数
-        self.declare_parameter('use_true_ap_positions', True)
+        # 控制是否使用AP真实位置的参数（已经写入了localization_using_area_graph的run.launch.py中）
+        self.declare_parameter('use_true_ap_positions', False)
         self.use_true_ap_positions = self.get_parameter('use_true_ap_positions').get_parameter_value().bool_value
         
         # 创建OSM解析器实例
@@ -74,8 +74,8 @@ class RobotLocalizer(Node):
                 self.raw_rss.append(msg)
                 self.get_logger().info(f'Received RSS data, current data points: {len(self.raw_rss)}')
                 
-                # 当收集到10个数据点时
-                if len(self.raw_rss) >= 10:
+                # 当收集到3个数据点时
+                if len(self.raw_rss) >= 3:
                     collected_data = self.raw_rss.copy()
                     # 不再销毁订阅者，而是取消订阅
                     self.destroy_subscription(self.rss_subscription)
@@ -130,7 +130,7 @@ class RobotLocalizer(Node):
             else:
                 self.get_logger().warn(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
         
-        if len(positions) >= 3:
+        if len(positions) >= 5:
             # 计算初始猜测位置（使用已知AP位置的平均值）
             initial_lat = np.mean([pos[0] for pos in positions])
             initial_lon = np.mean([pos[1] for pos in positions])
