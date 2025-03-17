@@ -74,8 +74,8 @@ class RobotLocalizer(Node):
                 self.raw_rss.append(msg)
                 self.get_logger().info(f'Received RSS data, current data points: {len(self.raw_rss)}')
                 
-                # 当收集到3个数据点时
-                if len(self.raw_rss) >= 3:
+                # 当收集到5个数据点时(修改WiFi定位的时间就需要修改这里)
+                if len(self.raw_rss) >= 5:
                     collected_data = self.raw_rss.copy()
                     # 不再销毁订阅者，而是取消订阅
                     self.destroy_subscription(self.rss_subscription)
@@ -130,7 +130,7 @@ class RobotLocalizer(Node):
             else:
                 self.get_logger().warn(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
         
-        if len(positions) >= 5:
+        if len(positions) >= 3:
             # 计算初始猜测位置（使用已知AP位置的平均值）
             initial_lat = np.mean([pos[0] for pos in positions])
             initial_lon = np.mean([pos[1] for pos in positions])
