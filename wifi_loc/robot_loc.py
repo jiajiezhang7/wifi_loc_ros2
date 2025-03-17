@@ -102,33 +102,33 @@ class RobotLocalizer(Node):
         mac_avg_rssi = {}
         for mac, rssi_list in mac_rssi_dict.items():
             mac_avg_rssi[mac] = sum(rssi_list) / len(rssi_list)
-            self.get_logger().info(f'MAC: {mac}, Average RSSI: {mac_avg_rssi[mac]:.2f}')
+            self.get_logger().debug(f'MAC: {mac}, Average RSSI: {mac_avg_rssi[mac]:.2f}')
         
         # 将 mac_avg_rssi 按 RSSI 值降序排序并取前 50 项
         mac_avg_rssi = dict(sorted(mac_avg_rssi.items(), key=lambda x: x[1], reverse=True)[:50])
         
-        self.get_logger().info(f'Top MAC addresses and their average RSSI values: {mac_avg_rssi}')
+        self.get_logger().debug(f'Top MAC addresses and their average RSSI values: {mac_avg_rssi}')
         
         positions = []
         rssis = []
         
         # 这是AP的真值 - 用它定位会很准
-        self.get_logger().info(f'Known AP positions count: {len(self.ap_to_position)}')
+        self.get_logger().debug(f'Known AP positions count: {len(self.ap_to_position)}')
         # 这是AP的估计值 - 用它定位会一般
-        self.get_logger().info(f'Estimated AP positions count: {len(self.estimated_AP_positions)}')
+        self.get_logger().debug(f'Estimated AP positions count: {len(self.estimated_AP_positions)}')
         self.get_logger().info(f'Using {"true" if self.use_true_ap_positions else "estimated"} AP positions for calculation')
         
         for mac, avg_rssi in mac_avg_rssi.items():
             if self.use_true_ap_positions and mac in self.ap_to_position:
-                self.get_logger().info(f'MAC address {mac} found in known list (using true position)')
+                self.get_logger().debug(f'MAC address {mac} found in known list (using true position)')
                 positions.append([self.ap_to_position[mac][0], self.ap_to_position[mac][1], 2])
                 rssis.append(avg_rssi)
             elif not self.use_true_ap_positions and mac in self.estimated_AP_positions:
-                self.get_logger().info(f'MAC address {mac} found in estimated list (using estimated position)')
+                self.get_logger().debug(f'MAC address {mac} found in estimated list (using estimated position)')
                 positions.append([self.estimated_AP_positions[mac][0], self.estimated_AP_positions[mac][1], 2])
                 rssis.append(avg_rssi)
             else:
-                self.get_logger().warn(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
+                self.get_logger().debug(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
         
         if len(positions) >= 3:
             # 计算初始猜测位置（使用已知AP位置的平均值）
