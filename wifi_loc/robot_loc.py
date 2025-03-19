@@ -59,6 +59,14 @@ class RobotLocalizer(Node):
                 poly = Polygon(way)
                 self.polygons.append((poly, way_level))
                 
+        # 初始化polygon_edges用于可视化
+        self.polygon_edges = {'1':[],'2':[], '3':[]}
+        for polygon, poly_level in self.polygons:
+            exterior_coords = list(polygon.exterior.coords)
+            for i in range(len(exterior_coords) - 1):
+                edge = LineString([exterior_coords[i], exterior_coords[i + 1]])
+                self.polygon_edges[poly_level].append(edge)
+                
         # 加载估计的AP位置(从json中读取)
         self.estimated_AP_positions = load_estimated_positions()
         
@@ -104,31 +112,56 @@ class RobotLocalizer(Node):
             mac_avg_rssi[mac] = sum(rssi_list) / len(rssi_list)
             self.get_logger().debug(f'MAC: {mac}, Average RSSI: {mac_avg_rssi[mac]:.2f}')
         
-        # 将 mac_avg_rssi 按 RSSI 值降序排序并取前 50 项
-        mac_avg_rssi = dict(sorted(mac_avg_rssi.items(), key=lambda x: x[1], reverse=True)[:50])
-        
-        self.get_logger().debug(f'Top MAC addresses and their average RSSI values: {mac_avg_rssi}')
-        
+        # 计算每个MAC地址所在的楼层
+        mac_floors = {}
+        for mac in mac_avg_rssi:
+            if mac in self.ap_level:
+                floor = int(self.ap_level[mac])
+                mac_floors[mac] = floor
+            else:
+                mac_floors[mac] = None
+
+        floor_counts = Counter([floor for floor in mac_floors.values() if floor is not None])
+        self.get_logger().info(f'每个楼层检测到的MAC地址数量: {dict(floor_counts)}')
+
+        # 确定最可能的楼层（检测到的MAC地址最多的楼层）
+        most_probable_floor = floor_counts.most_common(1)[0][0] if floor_counts else 2
+        self.get_logger().info(f'最可能的楼层: {most_probable_floor}')
+
+        # 将 mac_avg_rssi 按 RSSI 值降序排序
+        mac_avg_rssi = dict(sorted(mac_avg_rssi.items(), key=lambda x: x[1], reverse=True))
+
         positions = []
         rssis = []
-        
-        # 这是AP的真值 - 用它定位会很准
-        self.get_logger().debug(f'Known AP positions count: {len(self.ap_to_position)}')
-        # 这是AP的估计值 - 用它定位会一般
-        self.get_logger().debug(f'Estimated AP positions count: {len(self.estimated_AP_positions)}')
-        self.get_logger().info(f'Using {"true" if self.use_true_ap_positions else "estimated"} AP positions for calculation')
-        
+        AP_positions = self.ap_to_position if self.use_true_ap_positions else self.estimated_AP_positions
+
+        self.get_logger().debug(f'Using {"true" if self.use_true_ap_positions else "estimated"} AP positions for calculation')
+
+        # 按AP分组（忽略最后一个字符）
+        ap_groups = {}
         for mac, avg_rssi in mac_avg_rssi.items():
-            if self.use_true_ap_positions and mac in self.ap_to_position:
-                self.get_logger().debug(f'MAC address {mac} found in known list (using true position)')
-                positions.append([self.ap_to_position[mac][0], self.ap_to_position[mac][1], 2])
-                rssis.append(avg_rssi)
-            elif not self.use_true_ap_positions and mac in self.estimated_AP_positions:
-                self.get_logger().debug(f'MAC address {mac} found in estimated list (using estimated position)')
-                positions.append([self.estimated_AP_positions[mac][0], self.estimated_AP_positions[mac][1], 2])
-                rssis.append(avg_rssi)
-            else:
-                self.get_logger().debug(f'MAC address {mac} not found in {"known" if self.use_true_ap_positions else "estimated"} list')
+            if mac in AP_positions and int(self.ap_level[mac]) == most_probable_floor:
+                # 使用MAC地址除最后一个字符作为分组键
+                ap_group_key = mac[:-1]
+                if ap_group_key not in ap_groups:
+                    ap_groups[ap_group_key] = {
+                        'pos': [],
+                        'rssis': []
+                    }
+                ap_groups[ap_group_key]['pos'].append([AP_positions[mac][0], AP_positions[mac][1], 2])
+                ap_groups[ap_group_key]['rssis'].append(avg_rssi)
+
+        # 计算每个分组的平均位置和RSSI
+        for ap_key, group_data in ap_groups.items():
+            positions_array = np.array(group_data['pos'])
+            pos_data = np.mean(positions_array, axis=0)  # 返回[x_avg, y_avg, z_avg]
+            avg_group_rssi = sum(group_data['rssis']) / len(group_data['rssis'])
+
+            positions.append([pos_data[0], pos_data[1], pos_data[2]])
+            rssis.append(avg_group_rssi)
+
+        positions_tuples = [tuple(pos) for pos in positions]
+        self.get_logger().info(f'位置总数: {len(positions)}, 唯一位置数: {len(set(positions_tuples))}')
         
         if len(positions) >= 3:
             # 计算初始猜测位置（使用已知AP位置的平均值）
@@ -148,18 +181,106 @@ class RobotLocalizer(Node):
             if result is not None:
                 self.get_logger().info(f'Estimated position: {result.x}')
                 
+                # 计算room_id（使用前两个AP位置的平均值）
+                if len(positions) >= 2:
+                    first_two_positions = np.array(positions[:2])
+                    room_pos = np.mean(first_two_positions, axis=0)[:2]  # 返回[x_avg, y_avg]
+                    self.get_logger().info(f'Room position: {room_pos}')
+                else:
+                    room_pos = [result.x[0], result.x[1]]  # 如果AP数量不足，使用定位结果
+                
                 # 创建并发布 WifiLocation 消息
                 location_msg = WifiLocation()
                 # latitude 纬度 -- x[1],  longitude 经度 -- x[0]
-                location_msg.latitude = float(result.x[1])   
-                location_msg.longitude = float(result.x[0])  
-                location_msg.floor = int(round(result.x[2])) 
+                location_msg.latitude = float(result.x[1])
+                location_msg.longitude = float(result.x[0])
+                location_msg.floor = most_probable_floor
+                location_msg.room_long = float(room_pos[0])
+                location_msg.room_lat = float(room_pos[1])
+                location_msg.altitude = float(result.x[2])
                 
                 # 发布位置消息
                 self.location_publisher.publish(location_msg)
                 self.get_logger().info('Published location to /WifiLocation topic')
+                
+                # 可视化定位结果
+                self.visualize_localization_result(positions, rssis, result.x, room_pos=room_pos)
             else:
                 self.get_logger().error('Position estimation failed')
+
+    def visualize_localization_result(self, positions, rssis, result, room_pos=None):
+        """可视化定位结果、检测到的AP位置及其RSSI信号值"""
+        try:
+            # 导入matplotlib并设置非交互式后端
+            import matplotlib
+            matplotlib.use('Agg')  # 使用非交互式后端
+            import matplotlib.pyplot as plt
+            from datetime import datetime
+            
+            # 创建一个新图形
+            fig, ax = plt.subplots(figsize=(10, 8))
+            
+            # 绘制多边形（地图边界）
+            for edge in self.polygon_edges[str(2)]:
+                edge_x, edge_y = edge.xy
+                ax.plot(edge_x, edge_y, linewidth=1, linestyle='solid')
+            
+            # 绘制定位点
+            ax.scatter(result[0], result[1], color='red', s=100, marker='*', label='Location Result')
+            ax.annotate(f'Result ({result[0]:.2f}, {result[1]:.2f})', 
+                    (result[0], result[1]), 
+                    textcoords="offset points", 
+                    xytext=(0,10), 
+                    ha='center')
+            
+            # 绘制房间位置点（如果提供了room_pos）
+            if room_pos is not None:
+                ax.scatter(room_pos[0], room_pos[1], color='green', s=100, marker='o', label='Room Position')
+                ax.annotate(f'Room ({room_pos[0]:.2f}, {room_pos[1]:.2f})', 
+                        (room_pos[0], room_pos[1]), 
+                        textcoords="offset points", 
+                        xytext=(0,-20), 
+                        ha='center')
+                
+                # 绘制从房间位置到定位结果的连线
+                ax.plot([room_pos[0], result[0]], [room_pos[1], result[1]], 'r--', alpha=0.5, linewidth=2, label='Room-Result Distance')
+            
+            # 绘制检测到的AP位置并显示RSSI值
+            for i, (pos, rssi) in enumerate(zip(positions, rssis)):
+                ax.scatter(pos[0], pos[1], color='blue', s=50, alpha=0.7)
+                ax.annotate(f'AP{i+1}: {rssi:.1f} dBm', 
+                        (pos[0], pos[1]), 
+                        textcoords="offset points", 
+                        xytext=(0,-15), 
+                        ha='center', 
+                        fontsize=8)
+                
+                # 绘制从AP到定位结果的连线
+                ax.plot([pos[0], result[0]], [pos[1], result[1]], 'g--', alpha=0.3)
+            
+            # 添加图例和标题
+            ax.legend()
+            ax.set_title('WiFi Positioning Result')
+            ax.set_xlabel('Longitude')
+            ax.set_ylabel('Latitude')
+            
+            # 保持纵横比一致
+            ax.set_aspect('equal')
+            
+            # 生成带时间戳的文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            fig_path = f'/home/jay/AGLoc_ws/figs_wifi_loc/localization_result_{timestamp}.png'
+            
+            # 保存图像
+            plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+            
+            # 关闭图形，释放内存
+            plt.close(fig)
+            
+            self.get_logger().info(f'定位结果可视化已保存到 {fig_path}')
+            
+        except Exception as e:
+            self.get_logger().error(f'可视化定位结果时出错: {str(e)}')
 
 def main(args=None):
     rclpy.init(args=args)

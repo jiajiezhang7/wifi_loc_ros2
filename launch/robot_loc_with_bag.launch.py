@@ -17,7 +17,7 @@ def generate_launch_description():
     
     # 声明参数
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
-    bag_path = LaunchConfiguration('bag_path', default='/home/jay/wifi_ws/rosbag/95')
+    bag_path = LaunchConfiguration('bag_path')
     node_startup_delay = LaunchConfiguration('node_startup_delay', default='6.0')  # 设置延迟时间，默认6秒
     
     # 声明参数
@@ -29,7 +29,7 @@ def generate_launch_description():
     
     declare_bag_path = DeclareLaunchArgument(
         'bag_path',
-        default_value='/home/jay/wifi_ws/rosbag/95',
+        default_value='/home/jay/AGLoc_ws/rosbag/corrior_01',
         description='Path to the ROS2 bag directory'
     )
     
