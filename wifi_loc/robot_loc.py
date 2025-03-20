@@ -194,10 +194,13 @@ class RobotLocalizer(Node):
                 # latitude 纬度 -- x[1],  longitude 经度 -- x[0]
                 location_msg.latitude = float(result.x[1])
                 location_msg.longitude = float(result.x[0])
+                location_msg.altitude = float(result.x[2]) * 3.2
                 location_msg.floor = most_probable_floor
+
+                # 为了在AGLoc中确定房间ID，从而进一步缩小采样粒子的范围，因此这里需要提供房间的经纬度
                 location_msg.room_long = float(room_pos[0])
                 location_msg.room_lat = float(room_pos[1])
-                location_msg.altitude = float(result.x[2])
+
                 
                 # 发布位置消息
                 self.location_publisher.publish(location_msg)
