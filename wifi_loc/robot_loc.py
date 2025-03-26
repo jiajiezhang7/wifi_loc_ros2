@@ -24,15 +24,31 @@ class RobotLocalizer(Node):
             10  # QoS profile depth
         )
         
-        # 创建位置发布者
+        # 创建位置发布者，使用与particle_generator兼容的QoS设置
+        from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
+        
+        # 创建与particle_generator兼容的QoS配置
+        reliable_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
         self.location_publisher = self.create_publisher(
             WifiLocation,
             'WifiLocation',
-            10  # QoS profile depth
+            reliable_qos
         )
         
         # 初始化数据
         self.raw_rss = []
+        
+        # 保存最近一次的WiFi定位结果
+        self.latest_location_msg = None
+        
+        # 创建定时器，定期重发最新的WiFi定位结果（确保订阅者能接收到）
+        self.republish_timer = self.create_timer(1.0, self.republish_location)
         
         # 获取包路径并设置默认OSM文件路径
         package_share_dir = get_package_share_directory('wifi_loc')
@@ -192,8 +208,9 @@ class RobotLocalizer(Node):
                 # 创建并发布 WifiLocation 消息
                 location_msg = WifiLocation()
                 # latitude 纬度 -- x[1],  longitude 经度 -- x[0]
-                location_msg.latitude = float(result.x[1])
-                location_msg.longitude = float(result.x[0])
+                # TODO 先暂且改成这样，因为整个WiFi定位方法还需改善
+                location_msg.latitude = float(room_pos[1])
+                location_msg.longitude = float(room_pos[0])
                 location_msg.altitude = float(result.x[2]) * 3.2
                 location_msg.floor = most_probable_floor
 
@@ -202,7 +219,8 @@ class RobotLocalizer(Node):
                 location_msg.room_lat = float(room_pos[1])
 
                 
-                # 发布位置消息
+                # 保存并发布位置消息
+                self.latest_location_msg = location_msg
                 self.location_publisher.publish(location_msg)
                 self.get_logger().info('Published location to /WifiLocation topic')
                 
@@ -312,6 +330,12 @@ def main(args=None):
                 rclpy.shutdown()
         except Exception as e:
             print(f"Error during rclpy shutdown: {e}")
+
+    def republish_location(self):
+        """定期重发最新的WiFi定位结果，确保所有订阅者能接收到"""
+        if self.latest_location_msg is not None:
+            self.location_publisher.publish(self.latest_location_msg)
+            self.get_logger().debug('重新发布WiFi定位结果到 /WifiLocation 话题')
 
 if __name__ == '__main__':
     main()
