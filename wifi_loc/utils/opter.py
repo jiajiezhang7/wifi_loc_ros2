@@ -18,13 +18,11 @@ class RSSIOptimizer:
         distances = np.array(self.learn_no_wall_dis_rss['dis'])
         rssi_measured = np.array(self.learn_no_wall_dis_rss['rssi'])
         no_wall_result = minimize(self.loss_function, initial_params, args=(distances, rssi_measured))
-        
         popt, pcov = curve_fit(self.signal_model, distances, rssi_measured)
         rssi_0, n = popt  # 拟合的rssi_0和n
         sigma_rssi_0, sigma_n = np.sqrt(np.diag(pcov))  # 参数的不确定性（标准差）
 
-        print(f"拟合的 rssi_0: {rssi_0}, 不确定性: {sigma_rssi_0}")
-        print(f"拟合的 n: {n}, 不确定性: {sigma_n}")
+
         
         return no_wall_result, sigma_rssi_0, sigma_n
     
@@ -48,6 +46,7 @@ class RSSIOptimizer:
             result = least_squares(self.residuals, initial_guess, args=(distances, signal_strengths, L_d0, self.d0, n, angle))
             if len(distances) >= 7:
                 ave_val.append(result.x[0])
+            
             self.eq[eq_key]['at_val'] = result.x[0]
             # self.eq[eq_key]['bais'] = result.x[1]
             # print(f"Wall attenuation for : {result.x[0]}  bais: {result.x[1]}")
@@ -104,7 +103,7 @@ class PointEstimator:
         """
         初始化PointEstimator类
         
-        :param known_points: 已知点的三维坐标列表，格式为 [[lon1, lat1, alt1], [lon2, lat2, alt2], ...]
+        :param known_pointRSSIOptimizers: 已知点的三维坐标列表，格式为 [[lon1, lat1, alt1], [lon2, lat2, alt2], ...]
         :param distances: 每个已知点与待确定点的距离，格式为 [distance1, distance2, ...]
         """
         self.known_points = np.array(known_points)
@@ -140,7 +139,7 @@ class PointEstimator:
         return res
 
     
-    def estimate_point(self, initial_guess=[0, 0, 0]):
+    def estimate_point(self, initial_guess=[0, 0, 0], bounds=None):
         """
         使用最优化算法估计待确定点的坐标
         
@@ -148,13 +147,22 @@ class PointEstimator:
         :return: 优化后的三维坐标点，或者如果优化失败，返回None
         """
         self.optimization_history = []  # 清空历史记录
-        bounds = [
-            (self.min_lon, self.max_lon),  # 第一个变量的边界
-            (self.min_lat, self.max_lat),  # 第二个变量的边界
-            (initial_guess[2] - 3.2, initial_guess[2] + 1)  # 第三个变量的边界
-        ]
+        if bounds is None:
+            bounds2 = ([self.min_lon, self.min_lat, initial_guess[2] - 3.2], [ self.max_lon, self.max_lat, initial_guess[2] + 1])
+        else:
+            bounds2 = bounds
+        lower_bounds = [self.min_lon, self.min_lat, initial_guess[2] - 3.2]
+        upper_bounds = [self.max_lon, self.max_lat, initial_guess[2] + 1]
+    
+
+    
+        # 检查边界条件
+        for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds)):
+            if lb >= ub:
+                print(f"边界错误在维度 {i}: 下界 {lb} >= 上界 {ub}")
+                
         # result = minimize(self.ap_residuals, initial_guess, bounds=bounds,  method='SLSQP') # L-BFGS-B, TNC, or SLSQP, 
-        result = least_squares(self.ap_residuals, initial_guess , args=(), bounds=([self.min_lon, self.min_lat, initial_guess[2] - 3.2], [ self.max_lon, self.max_lat, initial_guess[2] + 1]))
+        result = least_squares(self.ap_residuals, initial_guess , args=(), bounds=bounds2)
         if result.success:
             # print(f"result.message {result.message} result.fun {result.fun}") 
             return result

@@ -1,9 +1,7 @@
-import sys
 import xml.etree.ElementTree as ET
 import pickle
 from collections import Counter
-from .read_pickle import RssData, read_data_from_pickle
-
+from shapely.geometry import Polygon, LineString
 class OsmDataParser:
     def __init__(self, osm_file):
         self.osm_file = osm_file
@@ -18,6 +16,8 @@ class OsmDataParser:
         self.tree = ET.parse(self.osm_file)
         self.root = self.tree.getroot()
         self.all_mac = []
+        self.polygons = []
+        self.polygon_edges = {'1':[],'2':[], '3':[]}
 
     def parse(self):
         for element in self.root:
@@ -58,13 +58,12 @@ class OsmDataParser:
                 level_tag = tag_.attrib.get('v')
 
         if path_tag:
-            # 使用read_data_from_pickle函数来加载数据
-            data = read_data_from_pickle(path_tag)
-            
+            with open(path_tag, 'rb') as f:
+                data = pickle.load(f)
             self.target_ap[(lon, lat)] = self.target_ap.get((lon, lat), {})
             self.target_ap[(lon, lat)]['mac'] = {}
             self.target_ap[(lon, lat)]['level'] = int(level_tag)
-            
+          
             for msg in data:
                 mac_addresses = msg.mac_address
                 rss_val = msg.data
@@ -93,5 +92,20 @@ class OsmDataParser:
             if way_level:
                 self.way_data.append((way_tuple, way_level))
 
+    def extract_polygon_edges(self):
+        
+        for way , way_level in self.way_data:
+            if len(way) > 2 and Polygon(way).is_valid:
+                poly = Polygon(way)
+                self.polygons.append((poly, way_level))
+
+        # 提取每个多边形的边界并转换为线段
+        
+        for polygon, poly_level in self.polygons:
+            exterior_coords = list(polygon.exterior.coords)
+            for i in range(len(exterior_coords) - 1):
+                edge = LineString([exterior_coords[i], exterior_coords[i + 1]])
+                self.polygon_edges[poly_level].append(edge)
+                
     def get_data(self):
-        return self.ap_to_position, self.ap_level, self.target_ap, self.way_data, self.all_mac
+        return self.ap_to_position, self.ap_level, self.target_ap, self.way_data, self.all_mac, self.polygons, self.polygon_edges

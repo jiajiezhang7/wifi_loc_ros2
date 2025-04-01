@@ -6,11 +6,17 @@ from wifi_loc.utils.read_pickle import RssData as PickleRssData, RssDatum
 from rss.msg import RssData, WifiLocation
 from collections import Counter
 import numpy as np
+import copy
 from wifi_loc.utils.util import rssi_to_distance, load_estimated_positions
+from wifi_loc.utils.util import calculate_precise_distance, find_largest_polygon, find_smallest_room_polygon
 from wifi_loc.utils.opter import PointEstimator
 from shapely.geometry import Polygon, Point, LineString
+from shapely.ops import nearest_points
 import os
 from ament_index_python.packages import get_package_share_directory
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 class RobotLocalizer(Node):
     def __init__(self):
@@ -58,33 +64,26 @@ class RobotLocalizer(Node):
         self.declare_parameter('osm_file_path', default_osm_path)
         self.osm_file_path = self.get_parameter('osm_file_path').get_parameter_value().string_value
         
-        # 控制是否使用AP真实位置的参数（已经写入了localization_using_area_graph的run.launch.py中）
+        # 控制是否使用AP真实位置的参数
         self.declare_parameter('use_true_ap_positions', False)
         self.use_true_ap_positions = self.get_parameter('use_true_ap_positions').get_parameter_value().bool_value
+        
+        # 添加调试输出，显示参数的值
+        if self.use_true_ap_positions:
+            self.get_logger().info('使用真实AP位置进行定位计算')
+        else:
+            self.get_logger().info('使用估计的AP位置进行定位计算')
         
         # 创建OSM解析器实例
         self.parser = OsmDataParser(self.osm_file_path)
         self.parser.parse()
+        self.parser.extract_polygon_edges()
         
         # 获取解析后的数据
-        self.ap_to_position, self.ap_level, self.target_ap, self.way_data, self.all_mac = self.parser.get_data()
-        
-        self.polygons = []
-        for way, way_level in self.way_data:
-            if len(way) > 2 and Polygon(way).is_valid:
-                poly = Polygon(way)
-                self.polygons.append((poly, way_level))
-                
-        # 初始化polygon_edges用于可视化
-        self.polygon_edges = {'1':[],'2':[], '3':[]}
-        for polygon, poly_level in self.polygons:
-            exterior_coords = list(polygon.exterior.coords)
-            for i in range(len(exterior_coords) - 1):
-                edge = LineString([exterior_coords[i], exterior_coords[i + 1]])
-                self.polygon_edges[poly_level].append(edge)
+        self.ap_to_position, self.ap_level, self.target_ap, self.way_data, self.all_mac, self.polygons, self.polygon_edges = self.parser.get_data()
                 
         # 加载估计的AP位置(从json中读取)
-        self.estimated_AP_positions = load_estimated_positions()
+        self.estimated_AP_positions = load_estimated_positions('/home/jay/AGLoc_ws/src/wifi_loc/wifi_loc/data/estimated_positions.json')
         
         # 创建logger
         self.get_logger().info('Robot localizer node has been initialized')
@@ -151,7 +150,7 @@ class RobotLocalizer(Node):
         rssis = []
         AP_positions = self.ap_to_position if self.use_true_ap_positions else self.estimated_AP_positions
 
-        self.get_logger().debug(f'Using {"true" if self.use_true_ap_positions else "estimated"} AP positions for calculation')
+        self.get_logger().info(f'定位计算使用{"真实" if self.use_true_ap_positions else "估计的"}AP位置，共{len(AP_positions)}个AP')
 
         # 按AP分组（忽略最后一个字符）
         ap_groups = {}
@@ -179,23 +178,157 @@ class RobotLocalizer(Node):
         positions_tuples = [tuple(pos) for pos in positions]
         self.get_logger().info(f'位置总数: {len(positions)}, 唯一位置数: {len(set(positions_tuples))}')
         
+        # 信号传播模型参数
+        iter_num_total = 10  # 迭代次数
+        ave_val = -25  # 墙体衰减值
+        rssi_0_opt = -26.95154604523117  # 优化后的RSSI参考值
+        n_opt = 2.8158686097356154  # 优化后的路径损耗指数
+        
+        # 查找最大面积的多边形（用于墙体检测）
+        largest_area = find_largest_polygon(self.polygons)
+        
         if len(positions) >= 3:
-            # 计算初始猜测位置（使用已知AP位置的平均值）
+            # 计算房间ID（使用前两个AP位置的平均值）
+            first_two_positions = np.array(positions[:2])
+            room_id = np.mean(first_two_positions, axis=0)[:2]  # 返回[x_avg, y_avg]
+            
+            # 查找包含初始点的最小房间（用于空间约束）
+            smallest_room = find_smallest_room_polygon(room_id, self.polygons, most_probable_floor)
+            
+            # 计算初始猜测位置
             initial_lat = np.mean([pos[0] for pos in positions])
             initial_lon = np.mean([pos[1] for pos in positions])
-            initial_alt = np.mean([pos[2] for pos in positions])
+            initial_alt = most_probable_floor * 3.2
             
             initial_guess = [initial_lat, initial_lon, initial_alt]
             
+            # 设置优化边界
+            if smallest_room is not None:
+                # 使用最小房间的边界作为优化限制
+                minx, miny, maxx, maxy = smallest_room['bounds']
+                optimization_bounds = ([minx, miny, initial_alt - 3.2], [maxx, maxy, initial_alt + 1])
+                self.get_logger().info(f'使用房间边界约束: {smallest_room["bounds"]}')
+                
+                # 确保初始猜测点在边界内
+                lower_bounds, upper_bounds = optimization_bounds
+                for i in range(len(initial_guess)):
+                    if initial_guess[i] < lower_bounds[i]:
+                        initial_guess[i] = lower_bounds[i]
+                        self.get_logger().info(f'初始猜测点第{i}维度小于下界，已调整到下界: {lower_bounds[i]}')
+                    elif initial_guess[i] > upper_bounds[i]:
+                        initial_guess[i] = upper_bounds[i]
+                        self.get_logger().info(f'初始猜测点第{i}维度大于上界，已调整到上界: {upper_bounds[i]}')
+            else:
+                # 默认边界
+                optimization_bounds = None
+                self.get_logger().info("未找到包含初始点的房间，使用默认边界")
+            
             # 将RSSI值转换为距离
-            distances = np.array([rssi_to_distance(rssi, A=-38.85890085025037, n=2.221716321548527) for rssi in rssis])
+            distances = np.array([rssi_to_distance(rssi, A=rssi_0_opt, n=n_opt) for rssi in rssis])
             
-            # 创建PointEstimator实例并估计位置
+            # 创建PointEstimator实例并估计初始位置
             estimator = PointEstimator(positions, distances, self.polygons)
-            result = estimator.estimate_point(initial_guess=initial_guess)
+            result_one = estimator.estimate_point(initial_guess=initial_guess, bounds=optimization_bounds)
+            result_init = result_one
             
-            if result is not None:
-                self.get_logger().info(f'Estimated position: {result.x}')
+            # 迭代定位过程
+            for iter_num in range(1, iter_num_total):
+                intersection_edge = []
+                at_val = []
+                temp_rssis = copy.deepcopy(rssis)
+                flags = np.zeros(len(positions))
+                
+                # 检测每个AP信号是否穿过墙体
+                for pos_num, pos_ap in enumerate(positions):
+                    # 提取距离RP最近的边
+                    ap_line = LineString([(pos_ap[0], pos_ap[1]), (result_one.x[0], result_one.x[1])])
+                    closest_edge = None
+                    closest_distance = float('inf')
+                    
+                    # 检查信号路径是否与墙体相交
+                    for edge in self.polygon_edges[str(most_probable_floor)]:
+                        if ap_line.intersects(edge):
+                            ap_intersection = ap_line.intersection(edge)
+                            ap_intersection_line_distance = calculate_precise_distance(
+                                pos_ap[0], pos_ap[1], ap_intersection.x, ap_intersection.y
+                            )
+                            
+                            if ap_intersection_line_distance < closest_distance:
+                                closest_distance = ap_intersection_line_distance
+                                closest_edge = edge
+                    
+                    # 计算closest_edge的长度（以米为单位）
+                    if closest_edge is not None:
+                        # 获取边的端点坐标
+                        edge_coords = list(closest_edge.coords)
+                        if len(edge_coords) >= 2:
+                            start_point = edge_coords[0]  # (x, y)
+                            end_point = edge_coords[-1]   # (x, y)
+                            
+                            edge_length_meters = calculate_precise_distance(
+                                start_point[0], start_point[1], end_point[0], end_point[1]
+                            )
+                            
+                            # 计算点到polygon边缘的实际距离（米）
+                            if largest_area is not None and ap_intersection is not None:
+                                # 找到多边形边界上最近的点
+                                boundary = largest_area[most_probable_floor]['polygon'].boundary
+                                nearest_point_on_boundary = nearest_points(ap_intersection, boundary)[1]
+                                
+                                # 计算实际地理距离（米）
+                                distance_meters = calculate_precise_distance(
+                                    ap_intersection.x, ap_intersection.y, 
+                                    nearest_point_on_boundary.x, nearest_point_on_boundary.y
+                                )
+                                
+                                # 如果墙体足够厚且长度足够长，考虑信号衰减
+                                if distance_meters > 5 and edge_length_meters > 2:
+                                    flags[pos_num] = 1
+                                    intersection_edge.append(closest_edge)
+                                    at_val.append(ave_val)
+                                    temp_rssis[pos_num] = temp_rssis[pos_num] - ave_val
+                
+                # 根据墙体衰减情况过滤AP
+                filter_dis = []
+                filter_pos = []
+                err_rssi = []
+                
+                for rssi_num, rssi in enumerate(temp_rssis):
+                    dis = rssi_to_distance(rssi, A=rssi_0_opt, n=n_opt)
+                    if flags[rssi_num] == 1 and dis < 60:
+                        err_rssi.append(rssi)
+                        filter_dis.append(dis)
+                        filter_pos.append(positions[rssi_num])
+                    elif flags[rssi_num] == 0 and dis < 20:
+                        err_rssi.append(rssi)
+                        filter_dis.append(dis)
+                        filter_pos.append(positions[rssi_num])
+                
+                # 如果过滤后AP数量不足，使用所有AP
+                if len(filter_dis) < 3:
+                    filter_pos = positions
+                    err_rssi = temp_rssis
+                    distances = np.array([rssi_to_distance(rssi, A=rssi_0_opt, n=n_opt) for rssi in temp_rssis])
+                    estimator = PointEstimator(positions, distances, self.polygons)
+                    result = estimator.estimate_point(initial_guess=initial_guess, bounds=optimization_bounds)
+                else:
+                    # 使用过滤后的AP重新计算初始猜测
+                    initial_lat = np.mean([pos[0] for pos in filter_pos])
+                    initial_lon = np.mean([pos[1] for pos in filter_pos])
+                    initial_alt = most_probable_floor * 3.2
+                    
+                    initial_guess = [initial_lat, initial_lon, initial_alt]
+                    estimator = PointEstimator(filter_pos, filter_dis, self.polygons)
+                    
+                    # 估计待确定点的坐标
+                    result = estimator.estimate_point(initial_guess=initial_guess, bounds=optimization_bounds)
+                
+                result_one = result
+            
+            self.get_logger().info(f'最终估计的坐标: {result_one.x}')
+            
+            if result_one is not None:
+                self.get_logger().info(f'Estimated position: {result_one.x}')
                 
                 # 计算room_id（使用前两个AP位置的平均值）
                 if len(positions) >= 2:
@@ -203,15 +336,22 @@ class RobotLocalizer(Node):
                     room_pos = np.mean(first_two_positions, axis=0)[:2]  # 返回[x_avg, y_avg]
                     self.get_logger().info(f'Room position: {room_pos}')
                 else:
-                    room_pos = [result.x[0], result.x[1]]  # 如果AP数量不足，使用定位结果
+                    room_pos = [result_one.x[0], result_one.x[1]]  # 如果AP数量不足，使用定位结果
+                
+                # 计算Room Position和Final Position连线的中点
+                mid_point = [
+                    (room_pos[0] + result_one.x[0]) / 2,  # 经度中点
+                    (room_pos[1] + result_one.x[1]) / 2,  # 纬度中点
+                    result_one.x[2]  # 保持原来的高度
+                ]
+                self.get_logger().info(f'计算得到的中点坐标: {mid_point}')
                 
                 # 创建并发布 WifiLocation 消息
                 location_msg = WifiLocation()
-                # latitude 纬度 -- x[1],  longitude 经度 -- x[0]
-                # TODO 先暂且改成这样，因为整个WiFi定位方法还需改善
-                location_msg.latitude = float(room_pos[1])
-                location_msg.longitude = float(room_pos[0])
-                location_msg.altitude = float(result.x[2]) * 3.2
+                # latitude 纬度 -- mid_point[1],  longitude 经度 -- mid_point[0]
+                location_msg.latitude = float(mid_point[1])
+                location_msg.longitude = float(mid_point[0])
+                location_msg.altitude = float(mid_point[2])
                 location_msg.floor = most_probable_floor
 
                 # 为了在AGLoc中确定房间ID，从而进一步缩小采样粒子的范围，因此这里需要提供房间的经纬度
@@ -224,19 +364,25 @@ class RobotLocalizer(Node):
                 self.location_publisher.publish(location_msg)
                 self.get_logger().info('Published location to /WifiLocation topic')
                 
+                # 将中点传递给可视化函数
+                self.visualize_localization_result(positions, rssis, result_one.x, room_pos=room_pos, 
+                                                  smallest_room=smallest_room, mid_point=mid_point)
+                
                 # 可视化定位结果
-                self.visualize_localization_result(positions, rssis, result.x, room_pos=room_pos)
+                # # 先可视化初始定位结果 (已注释掉，只保留最终结果)
+                # if result_init is not None and not np.array_equal(result_init.x, result_one.x):
+                #     self.visualize_localization_result(positions, rssis, result_init.x, room_pos=room_pos, 
+                #                                       smallest_room=smallest_room, is_init=True)
+                # 只可视化最终定位结果
+                # 这里不需要再调用可视化函数，因为已经在上面调用过了
             else:
                 self.get_logger().error('Position estimation failed')
 
-    def visualize_localization_result(self, positions, rssis, result, room_pos=None):
+    def visualize_localization_result(self, positions, rssis, result, room_pos=None, smallest_room=None, is_init=False, mid_point=None):
         """可视化定位结果、检测到的AP位置及其RSSI信号值"""
         try:
             # 导入matplotlib并设置非交互式后端
-            import matplotlib
             matplotlib.use('Agg')  # 使用非交互式后端
-            import matplotlib.pyplot as plt
-            from datetime import datetime
             
             # 创建一个新图形
             fig, ax = plt.subplots(figsize=(10, 8))
@@ -246,9 +392,30 @@ class RobotLocalizer(Node):
                 edge_x, edge_y = edge.xy
                 ax.plot(edge_x, edge_y, linewidth=1, linestyle='solid')
             
+            # 如果有最小房间边界，则绘制边界框
+            if smallest_room is not None:
+                minx, miny, maxx, maxy = smallest_room['bounds']
+                width = maxx - minx
+                height = maxy - miny
+                self.get_logger().info(f'最小房间边界: {smallest_room["bounds"]}')
+                # 创建一个矩形，表示房间边界
+                room_rect = patches.Rectangle(
+                    (minx, miny), width, height, 
+                    linewidth=3, 
+                    edgecolor='orange', 
+                    facecolor='none', 
+                    label='Room Boundary',
+                    linestyle='--'
+                )
+                
+                # 添加矩形到图形中
+                ax.add_patch(room_rect)
+            
             # 绘制定位点
-            ax.scatter(result[0], result[1], color='red', s=100, marker='*', label='Location Result')
-            ax.annotate(f'Result ({result[0]:.2f}, {result[1]:.2f})', 
+            result_label = 'Initial Position' if is_init else 'Final Position'
+            result_color = 'blue' if is_init else 'red'
+            ax.scatter(result[0], result[1], color=result_color, s=100, marker='*', label=result_label)
+            ax.annotate(f'{result_label} ({result[0]:.2f}, {result[1]:.2f})', 
                     (result[0], result[1]), 
                     textcoords="offset points", 
                     xytext=(0,10), 
@@ -265,6 +432,16 @@ class RobotLocalizer(Node):
                 
                 # 绘制从房间位置到定位结果的连线
                 ax.plot([room_pos[0], result[0]], [room_pos[1], result[1]], 'r--', alpha=0.5, linewidth=2, label='Room-Result Distance')
+                
+                # 绘制中点（如果提供了mid_point）
+                if mid_point is not None:
+                    ax.scatter(mid_point[0], mid_point[1], color='goldenrod', s=150, marker='*', label='Midpoint Position')
+                    ax.annotate(f'Midpoint ({mid_point[0]:.2f}, {mid_point[1]:.2f})', 
+                            (mid_point[0], mid_point[1]), 
+                            textcoords="offset points", 
+                            xytext=(0,15), 
+                            ha='center', 
+                            fontweight='bold')
             
             # 绘制检测到的AP位置并显示RSSI值
             for i, (pos, rssi) in enumerate(zip(positions, rssis)):
@@ -281,7 +458,8 @@ class RobotLocalizer(Node):
             
             # 添加图例和标题
             ax.legend()
-            ax.set_title('WiFi Positioning Result')
+            title = 'Initial WiFi Positioning Result' if is_init else 'Final WiFi Positioning Result'
+            ax.set_title(title)
             ax.set_xlabel('Longitude')
             ax.set_ylabel('Latitude')
             
@@ -289,8 +467,10 @@ class RobotLocalizer(Node):
             ax.set_aspect('equal')
             
             # 生成带时间戳的文件名
+            from datetime import datetime
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            fig_path = f'/home/jay/AGLoc_ws/figs_wifi_loc/localization_result_{timestamp}.png'
+            result_type = 'initial' if is_init else 'final'
+            fig_path = f'/home/jay/AGLoc_ws/figs_wifi_loc/localization_result_{result_type}_{timestamp}.png'
             
             # 保存图像
             plt.savefig(fig_path, dpi=300, bbox_inches='tight')
@@ -302,6 +482,12 @@ class RobotLocalizer(Node):
             
         except Exception as e:
             self.get_logger().error(f'可视化定位结果时出错: {str(e)}')
+            
+    def republish_location(self):
+        """定期重发最新的WiFi定位结果，确保所有订阅者能接收到"""
+        if self.latest_location_msg is not None:
+            self.location_publisher.publish(self.latest_location_msg)
+            self.get_logger().debug('重新发布WiFi定位结果到 /WifiLocation 话题')
 
 def main(args=None):
     rclpy.init(args=args)
@@ -331,11 +517,7 @@ def main(args=None):
         except Exception as e:
             print(f"Error during rclpy shutdown: {e}")
 
-    def republish_location(self):
-        """定期重发最新的WiFi定位结果，确保所有订阅者能接收到"""
-        if self.latest_location_msg is not None:
-            self.location_publisher.publish(self.latest_location_msg)
-            self.get_logger().debug('重新发布WiFi定位结果到 /WifiLocation 话题')
+
 
 if __name__ == '__main__':
     main()

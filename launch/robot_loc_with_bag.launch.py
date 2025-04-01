@@ -18,7 +18,8 @@ def generate_launch_description():
     # 声明参数
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     bag_path = LaunchConfiguration('bag_path')
-    node_startup_delay = LaunchConfiguration('node_startup_delay', default='6.0')  # 设置延迟时间，默认6秒
+    node_startup_delay = LaunchConfiguration('node_startup_delay', default='2.0')  # 设置延迟时间，默认6秒
+    use_true_ap_positions = LaunchConfiguration('use_true_ap_positions', default='true')
     
     # 声明参数
     declare_use_sim_time = DeclareLaunchArgument(
@@ -39,13 +40,22 @@ def generate_launch_description():
         description='Delay in seconds before starting rosbag playback to allow node initialization'
     )
     
+    declare_use_true_ap_positions = DeclareLaunchArgument(
+        'use_true_ap_positions',
+        default_value='true',
+        description='Use true AP positions instead of estimated positions if true'
+    )
+    
     # 创建 robot_loc 节点
     robot_loc_node = Node(
         package='wifi_loc',
         executable='robot_loc',
         name='robot_loc',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'use_true_ap_positions': use_true_ap_positions
+        }]
     )
     
     # 创建日志信息，表示节点启动
@@ -95,6 +105,7 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_bag_path,
         declare_node_startup_delay,
+        declare_use_true_ap_positions,
         robot_loc_node,
         start_rosbag_after_node,
         rosbag_exit_event_handler
