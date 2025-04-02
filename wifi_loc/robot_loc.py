@@ -401,7 +401,7 @@ class RobotLocalizer(Node):
                 # 创建一个矩形，表示房间边界
                 room_rect = patches.Rectangle(
                     (minx, miny), width, height, 
-                    linewidth=3, 
+                    linewidth=1.5,  # 减小线宽为原来的3的一半
                     edgecolor='orange', 
                     facecolor='none', 
                     label='Room Boundary',
@@ -415,20 +415,14 @@ class RobotLocalizer(Node):
             result_label = 'Initial Position' if is_init else 'Final Position'
             result_color = 'blue' if is_init else 'red'
             ax.scatter(result[0], result[1], color=result_color, s=100, marker='*', label=result_label)
-            ax.annotate(f'{result_label} ({result[0]:.2f}, {result[1]:.2f})', 
-                    (result[0], result[1]), 
-                    textcoords="offset points", 
-                    xytext=(0,10), 
-                    ha='center')
+            # 不在点旁边标注，而是收集坐标信息稍后统一显示
+            position_info = [f'{result_label}: ({result[0]:.6f}, {result[1]:.6f})']
             
             # 绘制房间位置点（如果提供了room_pos）
             if room_pos is not None:
                 ax.scatter(room_pos[0], room_pos[1], color='green', s=100, marker='o', label='Room Position')
-                ax.annotate(f'Room ({room_pos[0]:.2f}, {room_pos[1]:.2f})', 
-                        (room_pos[0], room_pos[1]), 
-                        textcoords="offset points", 
-                        xytext=(0,-20), 
-                        ha='center')
+                # 收集坐标信息
+                position_info.append(f'Room Position: ({room_pos[0]:.6f}, {room_pos[1]:.6f})')
                 
                 # 绘制从房间位置到定位结果的连线
                 ax.plot([room_pos[0], result[0]], [room_pos[1], result[1]], 'r--', alpha=0.5, linewidth=2, label='Room-Result Distance')
@@ -436,12 +430,8 @@ class RobotLocalizer(Node):
                 # 绘制中点（如果提供了mid_point）
                 if mid_point is not None:
                     ax.scatter(mid_point[0], mid_point[1], color='goldenrod', s=150, marker='*', label='Midpoint Position')
-                    ax.annotate(f'Midpoint ({mid_point[0]:.2f}, {mid_point[1]:.2f})', 
-                            (mid_point[0], mid_point[1]), 
-                            textcoords="offset points", 
-                            xytext=(0,15), 
-                            ha='center', 
-                            fontweight='bold')
+                    # 收集坐标信息
+                    position_info.append(f'Midpoint Position: ({mid_point[0]:.6f}, {mid_point[1]:.6f})')
             
             # 绘制检测到的AP位置并显示RSSI值
             for i, (pos, rssi) in enumerate(zip(positions, rssis)):
@@ -451,13 +441,22 @@ class RobotLocalizer(Node):
                         textcoords="offset points", 
                         xytext=(0,-15), 
                         ha='center', 
-                        fontsize=8)
+                        # 修改AP标签的字体大小
+                        fontsize=6)
                 
                 # 绘制从AP到定位结果的连线
                 ax.plot([pos[0], result[0]], [pos[1], result[1]], 'g--', alpha=0.3)
             
-            # 添加图例和标题
-            ax.legend()
+            # 在右下角添加坐标信息
+            coord_text = '\n'.join(position_info)
+            # 修改坐标信息的字体大小
+            ax.text(0.98, 0.05, coord_text, transform=ax.transAxes, fontsize=6,
+                   verticalalignment='bottom', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            # 添加图例和标题，放在右上角
+            # 图例的字体大小：matplotlib提供了预设的字体大小选项，从大到小依次是：'xx-large', 'x-large', 'large', 'medium', 'small', 'x-small', 'xx-small'
+            ax.legend(loc='upper right', fontsize='x-small')
             title = 'Initial WiFi Positioning Result' if is_init else 'Final WiFi Positioning Result'
             ax.set_title(title)
             ax.set_xlabel('Longitude')
