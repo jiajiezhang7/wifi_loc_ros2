@@ -1,0 +1,23 @@
+[
+    {
+        "timestamp": "2025-04-02 19:13:48",
+        "bag_name": "Mars_02",
+        "use_true_ap_positions": true,
+        "room_position": {
+            "longitude": 121.591071604075,
+            "latitude": 31.179448092104998
+        },
+        "coarse_position": {
+            "longitude": 121.59102537328458,
+            "latitude": 31.1794979813864,
+            "altitude": 6.39993914619904
+        },
+        "final_position": {
+            "longitude": 121.59104848867979,
+            "latitude": 31.179473036745698,
+            "altitude": 6.39993914619904
+        },
+        "room_result_distance": 7.072272284465415,
+        "floor": 2
+    }
+]

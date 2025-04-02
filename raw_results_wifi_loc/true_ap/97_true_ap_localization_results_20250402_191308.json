@@ -1,0 +1,23 @@
+[
+    {
+        "timestamp": "2025-04-02 19:13:08",
+        "bag_name": "97",
+        "use_true_ap_positions": true,
+        "room_position": {
+            "longitude": 121.591071604075,
+            "latitude": 31.179448092104998
+        },
+        "coarse_position": {
+            "longitude": 121.59096216045803,
+            "latitude": 31.179394009220005,
+            "altitude": 7.395000057048751
+        },
+        "final_position": {
+            "longitude": 121.59101688226652,
+            "latitude": 31.1794210506625,
+            "altitude": 7.395000057048751
+        },
+        "room_result_distance": 12.033168931508687,
+        "floor": 2
+    }
+]

@@ -1,0 +1,23 @@
+[
+    {
+        "timestamp": "2025-04-02 19:12:08",
+        "bag_name": "office_01",
+        "use_true_ap_positions": true,
+        "room_position": {
+            "longitude": 121.59094672227499,
+            "latitude": 31.179594624465
+        },
+        "coarse_position": {
+            "longitude": 121.59102293662403,
+            "latitude": 31.179654605159996,
+            "altitude": 7.395000166499413
+        },
+        "final_position": {
+            "longitude": 121.59098482944951,
+            "latitude": 31.179624614812496,
+            "altitude": 7.395000166499413
+        },
+        "room_result_distance": 9.84922534561025,
+        "floor": 2
+    }
+]

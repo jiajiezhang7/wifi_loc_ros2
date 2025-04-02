@@ -573,7 +573,7 @@ class RobotLocalizer(Node):
             result_type = 'initial' if is_init else 'final'
             
             # 创建保存目录
-            figs_dir = '/home/jay/AGLoc_ws/figs_wifi_loc'
+            figs_dir = '/home/jay/AGLoc_ws/src/wifi_loc/figs_wifi_loc'
             os.makedirs(figs_dir, exist_ok=True)
             
             # 添加bag名称和AP位置类型到文件名中
@@ -595,7 +595,7 @@ class RobotLocalizer(Node):
         """将定位结果保存到JSON文件"""
         try:
             # 创建保存目录
-            results_dir = '/home/jay/AGLoc_ws/results_wifi_loc'
+            results_dir = '/home/jay/AGLoc_ws/src/wifi_loc/raw_results_wifi_loc'
             os.makedirs(results_dir, exist_ok=True)
             
             # 生成包含rosbag名称和AP位置类型的文件名

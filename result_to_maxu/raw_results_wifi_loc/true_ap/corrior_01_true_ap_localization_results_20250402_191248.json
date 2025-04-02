@@ -1,0 +1,23 @@
+[
+    {
+        "timestamp": "2025-04-02 19:12:48",
+        "bag_name": "corrior_01",
+        "use_true_ap_positions": true,
+        "room_position": {
+            "longitude": 121.590799647255,
+            "latitude": 31.17954520096
+        },
+        "coarse_position": {
+            "longitude": 121.59085089877416,
+            "latitude": 31.179568453466874,
+            "altitude": 6.399988815739661
+        },
+        "final_position": {
+            "longitude": 121.59082527301459,
+            "latitude": 31.17955682721344,
+            "altitude": 6.399988815739661
+        },
+        "room_result_distance": 5.524033804739982,
+        "floor": 2
+    }
+]

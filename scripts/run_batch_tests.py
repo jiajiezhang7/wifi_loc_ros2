@@ -6,10 +6,11 @@ import time
 import signal
 import subprocess
 import argparse
+import shutil
 from datetime import datetime
 from tqdm import tqdm
 
-def run_test_with_bag(bag_path, use_true_ap_positions='true', timeout=15):
+def run_test_with_bag(bag_path, use_true_ap_positions='true', timeout=15, organize_results=True):
     """
     使用指定的bag运行测试
     
@@ -96,7 +97,51 @@ def run_test_with_bag(bag_path, use_true_ap_positions='true', timeout=15):
     # 等待一段时间，确保所有资源都已释放
     time.sleep(5)
     
+    # 如果需要组织结果，则将结果移动到对应目录
+    if organize_results:
+        organize_test_results(bag_path, use_true_ap_positions)
+    
     return True
+
+def organize_test_results(bag_path, use_true_ap_positions):
+    """
+    根据AP位置类型组织测试结果
+    
+    参数:
+        bag_path: rosbag的路径
+        use_true_ap_positions: 是否使用真实AP位置
+    """
+    bag_name = os.path.basename(bag_path)
+    ap_type = 'true_ap' if use_true_ap_positions.lower() == 'true' else 'est_ap'
+    
+    # 创建目标目录
+    results_base_dir = '/home/jay/AGLoc_ws/results_wifi_loc'
+    figs_base_dir = '/home/jay/AGLoc_ws/figs_wifi_loc'
+    
+    results_target_dir = os.path.join(results_base_dir, ap_type)
+    figs_target_dir = os.path.join(figs_base_dir, ap_type)
+    
+    os.makedirs(results_target_dir, exist_ok=True)
+    os.makedirs(figs_target_dir, exist_ok=True)
+    
+    # 移动结果文件
+    try:
+        # 移动JSON结果文件
+        for result_file in glob.glob(f'{results_base_dir}/{bag_name}_{ap_type}_*.json'):
+            file_name = os.path.basename(result_file)
+            target_path = os.path.join(results_target_dir, file_name)
+            shutil.move(result_file, target_path)
+            print(f"已移动结果文件: {file_name} 到 {results_target_dir}")
+        
+        # 移动图像文件
+        for fig_file in glob.glob(f'{figs_base_dir}/{bag_name}_{ap_type}_*.png'):
+            file_name = os.path.basename(fig_file)
+            target_path = os.path.join(figs_target_dir, file_name)
+            shutil.move(fig_file, target_path)
+            print(f"已移动图像文件: {file_name} 到 {figs_target_dir}")
+    
+    except Exception as e:
+        print(f"组织结果文件时出错: {e}")
 
 def main():
     # 解析命令行参数
@@ -105,10 +150,12 @@ def main():
                         help='包含rosbag的目录')
     parser.add_argument('--bag_names', type=str, nargs='+',
                         help='要测试的特定rosbag名称列表，如果不指定则测试目录中的所有rosbag')
-    parser.add_argument('--use_true_ap', type=str, choices=['true', 'false'], default='false',
-                        help='是否使用真实AP位置')
+    parser.add_argument('--use_true_ap', type=str, choices=['true', 'false', 'both'], default='both',
+                        help='是否使用真实AP位置: true, false, 或both(两者都测试)')
     parser.add_argument('--timeout', type=int, default=15,
                         help='每个测试的超时时间（秒）')
+    parser.add_argument('--organize_results', action='store_true', default=True,
+                        help='是否自动整理测试结果到对应目录')
     
     args = parser.parse_args()
     
@@ -140,18 +187,55 @@ def main():
     
     # 运行测试
     results = {}
-    # 使用tqdm创建进度条
-    for bag_path in tqdm(bag_paths, desc="测试进度", unit="bag"):
-        bag_name = os.path.basename(bag_path)
-        success = run_test_with_bag(bag_path, args.use_true_ap, args.timeout)
-        results[bag_name] = success
+    
+    # 确定要测试的AP位置模式
+    ap_modes = []
+    if args.use_true_ap == 'both':
+        ap_modes = ['true', 'false']
+    else:
+        ap_modes = [args.use_true_ap]
+    
+    # 使用tqdm创建总进度条
+    total_tests = len(bag_paths) * len(ap_modes)
+    with tqdm(total=total_tests, desc="总测试进度", unit="test") as pbar:
+        # 对每种AP位置模式进行测试
+        for ap_mode in ap_modes:
+            print(f"\n{'='*80}")
+            print(f"开始测试 AP位置模式: {'真实' if ap_mode == 'true' else '估计'}")
+            print(f"{'='*80}\n")
+            
+            # 对每个bag进行测试
+            for bag_path in bag_paths:
+                bag_name = os.path.basename(bag_path)
+                test_id = f"{bag_name}_{ap_mode}"
+                
+                print(f"\n正在测试: {bag_name} (AP模式: {'真实' if ap_mode == 'true' else '估计'})")
+                success = run_test_with_bag(bag_path, ap_mode, args.timeout, args.organize_results)
+                results[test_id] = success
+                
+                pbar.update(1)
     
     # 打印测试结果摘要
     print("\n测试结果摘要:")
     print(f"{'='*80}")
-    for bag_name, success in results.items():
-        status = "完成" if success else "失败"
-        print(f"{bag_name}: {status}")
+    
+    # 按AP位置模式分组显示结果
+    if 'true' in [mode for mode in ap_modes]:
+        print("\n真实AP位置测试结果:")
+        for test_id, success in results.items():
+            if '_true' in test_id:
+                bag_name = test_id.replace('_true', '')
+                status = "完成" if success else "失败"
+                print(f"{bag_name}: {status}")
+    
+    if 'false' in [mode for mode in ap_modes]:
+        print("\n估计AP位置测试结果:")
+        for test_id, success in results.items():
+            if '_false' in test_id:
+                bag_name = test_id.replace('_false', '')
+                status = "完成" if success else "失败"
+                print(f"{bag_name}: {status}")
+    
     print(f"{'='*80}")
     
     return 0
