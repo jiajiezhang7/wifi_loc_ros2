@@ -144,31 +144,73 @@ class PointEstimator:
         使用最优化算法估计待确定点的坐标
         
         :param initial_guess: 优化的初始猜测坐标，默认为 [0, 0, 0]
+        :param bounds: 优化的边界条件，格式为([lower_bounds], [upper_bounds])
         :return: 优化后的三维坐标点，或者如果优化失败，返回None
         """
         self.optimization_history = []  # 清空历史记录
+        
+        # 初始化边界
         if bounds is None:
-            bounds2 = ([self.min_lon, self.min_lat, initial_guess[2] - 3.2], [ self.max_lon, self.max_lat, initial_guess[2] + 1])
+            # 使用默认边界
+            lower_bounds = np.array([self.min_lon, self.min_lat, initial_guess[2] - 3.2])
+            upper_bounds = np.array([self.max_lon, self.max_lat, initial_guess[2] + 1])
         else:
-            bounds2 = bounds
-        lower_bounds = [self.min_lon, self.min_lat, initial_guess[2] - 3.2]
-        upper_bounds = [self.max_lon, self.max_lat, initial_guess[2] + 1]
-    
-
-    
-        # 检查边界条件
-        for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds)):
-            if lb >= ub:
-                print(f"边界错误在维度 {i}: 下界 {lb} >= 上界 {ub}")
-                
-        # result = minimize(self.ap_residuals, initial_guess, bounds=bounds,  method='SLSQP') # L-BFGS-B, TNC, or SLSQP, 
-        result = least_squares(self.ap_residuals, initial_guess , args=(), bounds=bounds2)
-        if result.success:
-            # print(f"result.message {result.message} result.fun {result.fun}") 
-            return result
-        else:
-            print(result.message)
-            print("优化未成功")
+            # 使用传入的边界
+            lower_bounds = np.array(bounds[0])
+            upper_bounds = np.array(bounds[1])
+        
+        # 确保边界有足够的间隔，避免上下界太接近
+        min_gap = 0.0001
+        for i in range(len(lower_bounds)):
+            if upper_bounds[i] - lower_bounds[i] < min_gap:
+                mid = (upper_bounds[i] + lower_bounds[i]) / 2
+                lower_bounds[i] = mid - min_gap/2
+                upper_bounds[i] = mid + min_gap/2
+                print(f"调整维度 {i} 的边界间隔: [下界: {lower_bounds[i]}, 上界: {upper_bounds[i]}]")
+        
+        # 确保初始猜测点在边界内（不在边界上）
+        adjusted_initial_guess = np.array(initial_guess).copy()
+        
+        # 根据边界调整初始猜测点
+        for i in range(len(adjusted_initial_guess)):
+            # 确保点不在边界上，而是严格地在边界内
+            margin = (upper_bounds[i] - lower_bounds[i]) * 0.01  # 使用边界间隔的1%作为安全边距
+            min_margin = 0.00001  # 最小边距
+            safe_margin = max(margin, min_margin)
+            
+            if adjusted_initial_guess[i] <= lower_bounds[i] + safe_margin:
+                adjusted_initial_guess[i] = lower_bounds[i] + safe_margin
+                print(f"将初始猜测点维度 {i} 调整到下界之上: {adjusted_initial_guess[i]}")
+            elif adjusted_initial_guess[i] >= upper_bounds[i] - safe_margin:
+                adjusted_initial_guess[i] = upper_bounds[i] - safe_margin
+                print(f"将初始猜测点维度 {i} 调整到上界之下: {adjusted_initial_guess[i]}")
+        
+        # 检查并输出调整后的状态
+        is_inside = True
+        for i in range(len(adjusted_initial_guess)):
+            if adjusted_initial_guess[i] <= lower_bounds[i] or adjusted_initial_guess[i] >= upper_bounds[i]:
+                is_inside = False
+                print(f"警告: 调整后的初始猜测点维度 {i} 仍然不在边界内")
+                print(f"  - 维度 {i}: 猜测点={adjusted_initial_guess[i]}, 边界=[{lower_bounds[i]}, {upper_bounds[i]}]")
+        
+        if not is_inside:
+            print("警告: 初始猜测点不在边界内，优化可能失败")
+            
+        # 将边界格式化为least_squares函数需要的格式
+        formatted_bounds = (lower_bounds, upper_bounds)
+            
+        try:
+            # 使用调整后的初始猜测点和格式化后的边界
+            result = least_squares(self.ap_residuals, adjusted_initial_guess, args=(), bounds=formatted_bounds)
+            if result.success:
+                return result
+            else:
+                print(f"\n优化失败: {result.message}")
+                print("优化未成功")
+                return None
+        except Exception as e:
+            print(f"\n优化异常: {str(e)}")
+            print("初始猜测点或边界条件有问题")
             return None
 
 

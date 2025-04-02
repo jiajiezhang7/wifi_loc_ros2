@@ -30,7 +30,7 @@ def generate_launch_description():
     
     declare_bag_path = DeclareLaunchArgument(
         'bag_path',
-        default_value='/home/jay/AGLoc_ws/rosbag/corrior_01',
+        default_value='/home/jay/AGLoc_ws/rosbag/Mars_02',
         description='Path to the ROS2 bag directory'
     )
     
@@ -54,6 +54,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
+            'bag_path': bag_path,
             'use_true_ap_positions': use_true_ap_positions
         }]
     )

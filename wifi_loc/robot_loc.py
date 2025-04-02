@@ -13,6 +13,8 @@ from wifi_loc.utils.opter import PointEstimator
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import nearest_points
 import os
+import json
+from datetime import datetime
 from ament_index_python.packages import get_package_share_directory
 import matplotlib
 import matplotlib.pyplot as plt
@@ -55,6 +57,16 @@ class RobotLocalizer(Node):
         
         # 创建定时器，定期重发最新的WiFi定位结果（确保订阅者能接收到）
         self.republish_timer = self.create_timer(1.0, self.republish_location)
+        
+        # 创建存储定位结果的列表
+        self.localization_results = []
+        
+        # 获取rosbag名称
+        self.declare_parameter('bag_path', '')
+        bag_path = self.get_parameter('bag_path').get_parameter_value().string_value
+        # 提取bag名称 - 使用目录的basename作为bag名称
+        self.bag_name = os.path.basename(bag_path) if bag_path else 'unknown_bag'
+        self.get_logger().info(f'使用bag: {self.bag_name}')
         
         # 获取包路径并设置默认OSM文件路径
         package_share_dir = get_package_share_directory('wifi_loc')
@@ -206,18 +218,85 @@ class RobotLocalizer(Node):
             if smallest_room is not None:
                 # 使用最小房间的边界作为优化限制
                 minx, miny, maxx, maxy = smallest_room['bounds']
-                optimization_bounds = ([minx, miny, initial_alt - 3.2], [maxx, maxy, initial_alt + 1])
-                self.get_logger().info(f'使用房间边界约束: {smallest_room["bounds"]}')
+                # 对least_squares函数，边界格式需要是([lower_bounds], [upper_bounds])
+                # 确保边界有正确的差距，避免上下界相等
+                height_lower = initial_alt - 3.2
+                height_upper = initial_alt + 1
                 
-                # 确保初始猜测点在边界内
-                lower_bounds, upper_bounds = optimization_bounds
-                for i in range(len(initial_guess)):
-                    if initial_guess[i] < lower_bounds[i]:
-                        initial_guess[i] = lower_bounds[i]
-                        self.get_logger().info(f'初始猜测点第{i}维度小于下界，已调整到下界: {lower_bounds[i]}')
-                    elif initial_guess[i] > upper_bounds[i]:
-                        initial_guess[i] = upper_bounds[i]
-                        self.get_logger().info(f'初始猜测点第{i}维度大于上界，已调整到上界: {upper_bounds[i]}')
+                # 确保边界不相等
+                if maxx - minx < 0.0001:
+                    maxx = minx + 0.0001
+                if maxy - miny < 0.0001:
+                    maxy = miny + 0.0001
+                if height_upper - height_lower < 0.0001:
+                    height_upper = height_lower + 0.0001
+                
+                # 调整初始猜测点使其在边界内
+                original_point = [initial_guess[0], initial_guess[1]]
+                
+                # 首先将初始猜测点限制在矩形边界内
+                if initial_guess[0] < minx:
+                    initial_guess[0] = minx + 0.0001  # 稍微偏移以避免在边界上
+                    self.get_logger().info(f'初始猜测点经度小于下界，已调整到: {initial_guess[0]}')
+                elif initial_guess[0] > maxx:
+                    initial_guess[0] = maxx - 0.0001
+                    self.get_logger().info(f'初始猜测点经度大于上界，已调整到: {initial_guess[0]}')
+                
+                if initial_guess[1] < miny:
+                    initial_guess[1] = miny + 0.0001
+                    self.get_logger().info(f'初始猜测点纬度小于下界，已调整到: {initial_guess[1]}')
+                elif initial_guess[1] > maxy:
+                    initial_guess[1] = maxy - 0.0001
+                    self.get_logger().info(f'初始猜测点纬度大于上界，已调整到: {initial_guess[1]}')
+                
+                if initial_guess[2] < height_lower:
+                    initial_guess[2] = height_lower + 0.0001
+                    self.get_logger().info(f'初始猜测点高度小于下界，已调整到: {initial_guess[2]}')
+                elif initial_guess[2] > height_upper:
+                    initial_guess[2] = height_upper - 0.0001
+                    self.get_logger().info(f'初始猜测点高度大于上界，已调整到: {initial_guess[2]}')
+                
+                # 如果有多边形信息，还需要检查点是否在多边形内
+                if 'polygon' in smallest_room:
+                    point = Point(initial_guess[0], initial_guess[1])
+                    if not smallest_room['polygon'].contains(point):
+                        # 找到从原始点到多边形边界的最近点（垂足）
+                        original_point_shapely = Point(original_point[0], original_point[1])
+                        boundary = smallest_room['polygon'].boundary
+                        nearest_point = nearest_points(original_point_shapely, boundary)[1]
+                        
+                        # 将初始猜测点调整为边界上的最近点
+                        initial_guess[0] = nearest_point.x
+                        initial_guess[1] = nearest_point.y
+                        self.get_logger().info(f'初始猜测点不在房间多边形内，已调整到边界最近点: ({nearest_point.x}, {nearest_point.y})')
+                        
+                        # 将边界点向多边形内部稍微偏移，确保在多边形内
+                        centroid = smallest_room['polygon'].centroid
+                        # 计算从边界点到中心的向量
+                        vector_to_center = [centroid.x - nearest_point.x, centroid.y - nearest_point.y]
+                        vector_length = np.sqrt(vector_to_center[0]**2 + vector_to_center[1]**2)
+                        if vector_length > 0:
+                            # 往中心方向偏移一小段距离
+                            offset = 0.0001
+                            initial_guess[0] += (vector_to_center[0] / vector_length) * offset
+                            initial_guess[1] += (vector_to_center[1] / vector_length) * offset
+                            
+                            # 再次检查是否在多边形内
+                            point = Point(initial_guess[0], initial_guess[1])
+                            if not smallest_room['polygon'].contains(point):
+                                # 如果仍然不在多边形内，使用多边形的中心点
+                                initial_guess[0] = centroid.x
+                                initial_guess[1] = centroid.y
+                                self.get_logger().info(f'垂足偏移后仍不在多边形内，已调整到房间中心: ({centroid.x}, {centroid.y})')
+                
+                # 最后再次确认初始猜测点在边界内，并稍微偏移以避免在边界上
+                initial_guess[0] = max(minx + 0.0001, min(initial_guess[0], maxx - 0.0001))
+                initial_guess[1] = max(miny + 0.0001, min(initial_guess[1], maxy - 0.0001))
+                initial_guess[2] = max(height_lower + 0.0001, min(initial_guess[2], height_upper - 0.0001))
+                
+                # 设置最终的优化边界，确保初始猜测点在边界内
+                optimization_bounds = ([minx, miny, height_lower], [maxx, maxy, height_upper])
+                self.get_logger().info(f'使用房间边界约束: {optimization_bounds}')
             else:
                 # 默认边界
                 optimization_bounds = None
@@ -364,6 +443,27 @@ class RobotLocalizer(Node):
                 self.location_publisher.publish(location_msg)
                 self.get_logger().info('Published location to /WifiLocation topic')
                 
+                # 计算Room-Result距离
+                room_result_distance = calculate_precise_distance(
+                    room_pos[0], room_pos[1], result_one.x[0], result_one.x[1]
+                )
+                
+                # 将定位结果保存到列表中
+                result_data = {
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'bag_name': self.bag_name,
+                    'use_true_ap_positions': self.use_true_ap_positions,
+                    'room_position': {'longitude': float(room_pos[0]), 'latitude': float(room_pos[1])},
+                    'final_position': {'longitude': float(result_one.x[0]), 'latitude': float(result_one.x[1]), 'altitude': float(result_one.x[2])},
+                    'midpoint_position': {'longitude': float(mid_point[0]), 'latitude': float(mid_point[1]), 'altitude': float(mid_point[2])},
+                    'room_result_distance': float(room_result_distance),
+                    'floor': int(most_probable_floor)
+                }
+                self.localization_results.append(result_data)
+                
+                # 将定位结果保存到JSON文件
+                self.save_results_to_json()
+                
                 # 将中点传递给可视化函数
                 self.visualize_localization_result(positions, rssis, result_one.x, room_pos=room_pos, 
                                                   smallest_room=smallest_room, mid_point=mid_point)
@@ -457,7 +557,9 @@ class RobotLocalizer(Node):
             # 添加图例和标题，放在右上角
             # 图例的字体大小：matplotlib提供了预设的字体大小选项，从大到小依次是：'xx-large', 'x-large', 'large', 'medium', 'small', 'x-small', 'xx-small'
             ax.legend(loc='upper right', fontsize='x-small')
-            title = 'Initial WiFi Positioning Result' if is_init else 'Final WiFi Positioning Result'
+            # 在标题中添加AP位置类型信息
+            ap_type_text = 'True AP Positions' if self.use_true_ap_positions else 'Estimated AP Positions'
+            title = f"{'Initial' if is_init else 'Final'} WiFi Positioning Result ({ap_type_text})"
             ax.set_title(title)
             ax.set_xlabel('Longitude')
             ax.set_ylabel('Latitude')
@@ -465,11 +567,17 @@ class RobotLocalizer(Node):
             # 保持纵横比一致
             ax.set_aspect('equal')
             
-            # 生成带时间戳的文件名
-            from datetime import datetime
+            # 生成带时间戳和rosbag名称的文件名
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             result_type = 'initial' if is_init else 'final'
-            fig_path = f'/home/jay/AGLoc_ws/figs_wifi_loc/localization_result_{result_type}_{timestamp}.png'
+            
+            # 创建保存目录
+            figs_dir = '/home/jay/AGLoc_ws/figs_wifi_loc'
+            os.makedirs(figs_dir, exist_ok=True)
+            
+            # 添加bag名称和AP位置类型到文件名中
+            ap_type = 'true_ap' if self.use_true_ap_positions else 'est_ap'
+            fig_path = f'{figs_dir}/{self.bag_name}_{ap_type}_localization_result_{result_type}_{timestamp}.png'
             
             # 保存图像
             plt.savefig(fig_path, dpi=300, bbox_inches='tight')
@@ -482,6 +590,26 @@ class RobotLocalizer(Node):
         except Exception as e:
             self.get_logger().error(f'可视化定位结果时出错: {str(e)}')
             
+    def save_results_to_json(self):
+        """将定位结果保存到JSON文件"""
+        try:
+            # 创建保存目录
+            results_dir = '/home/jay/AGLoc_ws/results_wifi_loc'
+            os.makedirs(results_dir, exist_ok=True)
+            
+            # 生成包含rosbag名称和AP位置类型的文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            ap_type = 'true_ap' if self.use_true_ap_positions else 'est_ap'
+            filename = os.path.join(results_dir, f'{self.bag_name}_{ap_type}_localization_results_{timestamp}.json')
+            
+            # 将结果写入JSON文件
+            with open(filename, 'w') as f:
+                json.dump(self.localization_results, f, indent=4)
+            
+            self.get_logger().info(f'定位结果已保存到 {filename}')
+        except Exception as e:
+            self.get_logger().error(f'保存定位结果到JSON文件时出错: {str(e)}')
+    
     def republish_location(self):
         """定期重发最新的WiFi定位结果，确保所有订阅者能接收到"""
         if self.latest_location_msg is not None:
