@@ -454,8 +454,8 @@ class RobotLocalizer(Node):
                     'bag_name': self.bag_name,
                     'use_true_ap_positions': self.use_true_ap_positions,
                     'room_position': {'longitude': float(room_pos[0]), 'latitude': float(room_pos[1])},
-                    'final_position': {'longitude': float(result_one.x[0]), 'latitude': float(result_one.x[1]), 'altitude': float(result_one.x[2])},
-                    'midpoint_position': {'longitude': float(mid_point[0]), 'latitude': float(mid_point[1]), 'altitude': float(mid_point[2])},
+                    'coarse_position': {'longitude': float(result_one.x[0]), 'latitude': float(result_one.x[1]), 'altitude': float(result_one.x[2])},
+                    'final_position': {'longitude': float(mid_point[0]), 'latitude': float(mid_point[1]), 'altitude': float(mid_point[2])},
                     'room_result_distance': float(room_result_distance),
                     'floor': int(most_probable_floor)
                 }
@@ -512,26 +512,27 @@ class RobotLocalizer(Node):
                 ax.add_patch(room_rect)
             
             # 绘制定位点
-            result_label = 'Initial Position' if is_init else 'Final Position'
-            result_color = 'blue' if is_init else 'red'
-            ax.scatter(result[0], result[1], color=result_color, s=100, marker='*', label=result_label)
+            result_label = 'Initial Position' if is_init else 'Coarse Position'
+            result_color = 'blue' if is_init else 'goldenrod'
+            result_marker = '*' if is_init else 'o'
+            ax.scatter(result[0], result[1], color=result_color, s=50, marker=result_marker, label=result_label)
             # 不在点旁边标注，而是收集坐标信息稍后统一显示
             position_info = [f'{result_label}: ({result[0]:.6f}, {result[1]:.6f})']
             
             # 绘制房间位置点（如果提供了room_pos）
             if room_pos is not None:
-                ax.scatter(room_pos[0], room_pos[1], color='green', s=100, marker='o', label='Room Position')
+                ax.scatter(room_pos[0], room_pos[1], color='green', s=50, marker='o', label='Room Position')
                 # 收集坐标信息
                 position_info.append(f'Room Position: ({room_pos[0]:.6f}, {room_pos[1]:.6f})')
                 
                 # 绘制从房间位置到定位结果的连线
-                ax.plot([room_pos[0], result[0]], [room_pos[1], result[1]], 'r--', alpha=0.5, linewidth=2, label='Room-Result Distance')
+                ax.plot([room_pos[0], result[0]], [room_pos[1], result[1]], 'r--', alpha=0.5, linewidth=2, label='Room-Coarse Distance')
                 
-                # 绘制中点（如果提供了mid_point）
+                # 绘制最终位置点（如果提供了mid_point）
                 if mid_point is not None:
-                    ax.scatter(mid_point[0], mid_point[1], color='goldenrod', s=150, marker='*', label='Midpoint Position')
+                    ax.scatter(mid_point[0], mid_point[1], color='red', s=150, marker='*', label='Final Position')
                     # 收集坐标信息
-                    position_info.append(f'Midpoint Position: ({mid_point[0]:.6f}, {mid_point[1]:.6f})')
+                    position_info.append(f'Final Position: ({mid_point[0]:.6f}, {mid_point[1]:.6f})')
             
             # 绘制检测到的AP位置并显示RSSI值
             for i, (pos, rssi) in enumerate(zip(positions, rssis)):
