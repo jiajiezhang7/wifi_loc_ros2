@@ -32,6 +32,9 @@ class RobotLocalizer(Node):
             10  # QoS profile depth
         )
         
+        # 加载真值数据
+        self.ground_truth = self.load_ground_truth()
+        
         # 创建位置发布者，使用与particle_generator兼容的QoS设置
         from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
         
@@ -99,6 +102,12 @@ class RobotLocalizer(Node):
         
         # 创建logger
         self.get_logger().info('Robot localizer node has been initialized')
+        
+        # 记录当前bag对应的真值位置
+        if self.bag_name in self.ground_truth:
+            self.get_logger().info(f'找到bag {self.bag_name}的真值位置: {self.ground_truth[self.bag_name]}')
+        else:
+            self.get_logger().warn(f'未找到bag {self.bag_name}的真值位置')
 
     def callback_rss(self, msg):
         """
@@ -459,6 +468,18 @@ class RobotLocalizer(Node):
                     'room_result_distance': float(room_result_distance),
                     'floor': int(most_probable_floor)
                 }
+                
+                # 如果存在真值，添加到结果中
+                if self.bag_name in self.ground_truth:
+                    gt_pos = self.ground_truth[self.bag_name]
+                    result_data['ground_truth'] = {'longitude': float(gt_pos[1]), 'latitude': float(gt_pos[0])}
+                    
+                    # 计算最终位置与真值的距离
+                    gt_distance = calculate_precise_distance(
+                        gt_pos[1], gt_pos[0], mid_point[0], mid_point[1]
+                    )
+                    result_data['final_gt_distance'] = float(gt_distance)
+                    self.get_logger().info(f'最终位置与真值的距离: {gt_distance:.2f} 米')
                 self.localization_results.append(result_data)
                 
                 # 将定位结果保存到JSON文件
@@ -478,6 +499,32 @@ class RobotLocalizer(Node):
             else:
                 self.get_logger().error('Position estimation failed')
 
+    def load_ground_truth(self):
+        """加载真值数据"""
+        try:
+            # 获取包路径
+            package_share_dir = get_package_share_directory('wifi_loc')
+            gt_file_path = os.path.join(package_share_dir, 'gt_pose', 'rosbag_gt_pose.json')
+            
+            # 如果文件不存在，尝试相对路径
+            if not os.path.exists(gt_file_path):
+                gt_file_path = '/home/jay/AGLoc_ws/src/wifi_loc/gt_pose/rosbag_gt_pose.json'
+            
+            # 检查文件是否存在
+            if not os.path.exists(gt_file_path):
+                self.get_logger().warn(f'真值文件不存在: {gt_file_path}')
+                return {}
+            
+            # 读取JSON文件
+            with open(gt_file_path, 'r') as f:
+                ground_truth = json.load(f)
+            
+            self.get_logger().info(f'成功加载真值数据，包含{len(ground_truth)}个位置')
+            return ground_truth
+        except Exception as e:
+            self.get_logger().error(f'加载真值数据时出错: {str(e)}')
+            return {}
+    
     def visualize_localization_result(self, positions, rssis, result, room_pos=None, smallest_room=None, is_init=False, mid_point=None):
         """可视化定位结果、检测到的AP位置及其RSSI信号值"""
         try:
@@ -533,6 +580,25 @@ class RobotLocalizer(Node):
                     ax.scatter(mid_point[0], mid_point[1], color='red', s=150, marker='*', label='Final Position')
                     # 收集坐标信息
                     position_info.append(f'Final Position: ({mid_point[0]:.6f}, {mid_point[1]:.6f})')
+                
+                # 绘制真值位置（如果存在）
+                if self.bag_name in self.ground_truth:
+                    gt_pos = self.ground_truth[self.bag_name]
+                    # 使用紫色五角星标记真值位置，大小与Final Position相同
+                    ax.scatter(gt_pos[1], gt_pos[0], color='purple', s=150, marker='*', label='Ground Truth')
+                    # 收集坐标信息
+                    position_info.append(f'Ground Truth: ({gt_pos[1]:.6f}, {gt_pos[0]:.6f})')
+                    
+                    # 如果有mid_point，计算与真值的距离
+                    if mid_point is not None:
+                        gt_distance = calculate_precise_distance(
+                            gt_pos[1], gt_pos[0], mid_point[0], mid_point[1]
+                        )
+                        position_info.append(f'Final-GT Distance: {gt_distance:.2f} m')
+                        
+                        # 绘制从最终位置到真值的连线
+                        ax.plot([mid_point[0], gt_pos[1]], [mid_point[1], gt_pos[0]], 'm--', 
+                                alpha=0.7, linewidth=2, label='Final-GT Distance')
             
             # 绘制检测到的AP位置并显示RSSI值
             for i, (pos, rssi) in enumerate(zip(positions, rssis)):
